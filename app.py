@@ -1,12 +1,9 @@
 import streamlit as st
 import pandas as pd
 import camelot
-import json
-import os
 import plotly.express as px
 
 from Category import CategoryManager
-from function import save_config, load_config
 
 st.set_page_config(page_title="PDF 交易记录分析", layout="wide")
 
@@ -16,7 +13,7 @@ st.sidebar.title("📋 分类管理")
 DEFAULT_CATEGORY_MAP = {
     "餐饮": ["肯德基", "麦当劳", "奶茶", "面馆", "早餐"],
     "商超零售": ["超市", "水果", "零食", "便利店"],
-    "通信": ["中国联通", "移动", "电信", "宽带","刘猛"],
+    "通信": ["中国联通", "移动", "电信", "宽带", "刘猛"],
 }
 CONFIG_PATH = "category_config.yaml"
 
@@ -49,7 +46,6 @@ if st.sidebar.button("💾 保存配置"):
         st.error(f"❌ 保存失败: {e}")
 
 
-print(manager.to_dict())
 @st.cache_data
 def extract_filtered_data(pdf_path):
     columns = [3.01, 4.32, 5.61, 7.12, 8.75, 11.12, 12.43, 13.73]
@@ -73,11 +69,8 @@ def extract_filtered_data(pdf_path):
         opponent = opponent.strip()
         for category, keywords in manager.to_dict().items():
             for keyword in keywords:
-                # print(f"keyword {keyword} {opponent}")
                 if keyword in opponent:
-                    # print(f"分类匹配：{opponent} => {category} (关键词: {keyword})")
                     return category
-        # print(f"未匹配：{opponent}")
         return "其他"
 
     KANGXI_MAP = {"⼀": "一", "⼄": "乙", "⼆": "二", "⼈": "人", "⼉": "儿", "⼊": "入", "⼋": "八", "⼏": "几", "⼑": "刀",
@@ -127,6 +120,8 @@ def extract_filtered_data(pdf_path):
     result_df["金额"] = result_df["金额"].str.replace(",", "").astype(float)
     for col in ["对手信息"]:
         result_df[col] = result_df[col].apply(normalize_text)
+    for col in ["收支方式"]:
+        result_df[col] = result_df[col].apply(normalize_text)
     result_df["消费类别"] = result_df["对手信息"].apply(classify_opponent)
     result_df["日期"] = pd.to_datetime(result_df["日期"], format="%Y%m%d")
 
@@ -152,6 +147,13 @@ if uploaded_file:
     max_date = df["日期"].max()
     date_range = st.sidebar.date_input("日期范围", (min_date, max_date))
 
+    # 收支方式
+    iu_options = df["收支方式"].unique().tolist()
+    # 排除 "正常还款"
+    exclude_items = ["正常还款", "程支付"]
+    iu_default = [item for item in iu_options if item not in exclude_items]
+    iu_channels = st.sidebar.multiselect("收支方式", iu_options, default=iu_default)
+
     # 对手
     opponent_options = df["对手信息"].unique().tolist()
     opponent_channels = st.sidebar.multiselect("对手信息", opponent_options, default=[])
@@ -167,7 +169,9 @@ if uploaded_file:
     # 应用筛选
     filtered_df = df[
         (df["日期"] >= pd.to_datetime(date_range[0])) &
-        (df["日期"] <= pd.to_datetime(date_range[1]))
+        (df["日期"] <= pd.to_datetime(
+            date_range[1] if date_range and len(date_range) >= 2 and date_range[1] else pd.Timestamp.today()))
+
         ]
 
     if opponent_channels:
@@ -178,6 +182,9 @@ if uploaded_file:
 
     if selected_categories:
         filtered_df = filtered_df[filtered_df["消费类别"].isin(selected_categories)]
+
+    if iu_channels:
+        filtered_df = filtered_df[filtered_df["收支方式"].isin(iu_channels)]
 
     # 显示结果
     st.subheader("📌 统计结果")
@@ -200,9 +207,8 @@ if uploaded_file:
     st.subheader("📈 各类消费汇总饼图")
     # 仅保留支出类数据（总金额 < 0）
     expense_summary = category_summary[
-        (category_summary["总金额"] < 0) &
-        (category_summary["消费类别"] != "其他")
-        ].copy()
+        (category_summary["总金额"] < 0)
+    ].copy()
     expense_summary["支出金额"] = expense_summary["总金额"].abs()  # 转为正数用于饼图显示
 
     # 饼图展示
